@@ -69,8 +69,9 @@ jobs:
           notes=$(cat <<EOF
           Validated Windows x64 build of this llama.cpp fork for NVIDIA sm_70 / compute capability 7.0.
 
-          - Source commit: ${SOURCE_SHA}
+          - Binary source commit: ${SOURCE_SHA}
           - Validated workflow run: #6
+          - Release tag target: ${GITHUB_SHA} (publisher commit on the current default branch)
           - CUDA Toolkit used for build: 12.0.0
           - MSVC: 14.29 / compiler 19.29
           - CUDA runtime bundled: cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll
@@ -85,12 +86,13 @@ jobs:
           else
             gh release create "${RELEASE_TAG}" "${RELEASE_ASSET}" "${RELEASE_ASSET}.sha256" \
               --repo "${GITHUB_REPOSITORY}" \
-              --target "${SOURCE_SHA}" \
+              --target "${GITHUB_SHA}" \
               --title "llama.cpp Windows x64 - CUDA 12.0 / sm_70 (da3b56228b5e)" \
               --notes "${notes}"
           fi
 
       - name: Disable inactive upstream CANN workflow on this fork
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
