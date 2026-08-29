@@ -25,48 +25,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # CUDA 12.0 supports MSVC 193x. The current windows-2022 image defaults
-      # to MSVC 19.44, whose STL explicitly requires CUDA 12.4 or newer.
-      # Install the VS 2022 17.4 / MSVC 14.34 toolset and select it below.
-      - name: Install MSVC v143 14.34 toolset
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vsPath = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
-          $toolsetRoot = Join-Path $vsPath 'VC\Tools\MSVC'
-          $toolset = Get-ChildItem $toolsetRoot -Directory -Filter '14.34.*' -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            Select-Object -First 1
-
-          if (-not $toolset) {
-            $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
-            if (-not (Test-Path $setup)) {
-              throw "Visual Studio Installer not found: $setup"
-            }
-
-            $component = 'Microsoft.VisualStudio.Component.VC.14.34.17.4.x86.x64'
-            $arguments = "modify --installPath `"$vsPath`" --add $component --quiet --norestart"
-            Write-Host "Installing $component"
-            $process = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
-            if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
-              throw "Visual Studio Installer failed with exit code $($process.ExitCode)"
-            }
-
-            $toolset = Get-ChildItem $toolsetRoot -Directory -Filter '14.34.*' -ErrorAction SilentlyContinue |
-              Sort-Object Name -Descending |
-              Select-Object -First 1
-          }
-
-          if (-not $toolset) {
-            throw 'MSVC 14.34 toolset was not found after installation'
-          }
-          Write-Host "MSVC 14.34 toolset: $($toolset.FullName)"
-
+      # CUDA 12.0 officially supports MSVC 192x and 193x. The current
+      # windows-2022 default is MSVC 19.44, whose STL requires CUDA >= 12.4.
+      # The runner already carries the v142 / MSVC 14.29 (compiler 19.29)
+      # toolset, so select it instead of installing an old toolset every run.
       - name: Setup CUDA 12.0-compatible MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: step-security/msvc-dev-cmd@v1
         with:
           arch: x64
-          toolset: '14.34'
+          toolset: '14.29'
           sdk: '10.0.22621.0'
 
       - name: Install CUDA Toolkit 12.0.0
@@ -92,8 +59,8 @@ jobs:
 
           $clVersion = (& cl 2>&1 | Out-String)
           Write-Host $clVersion
-          if ($clVersion -notmatch 'Version 19\.34\.') {
-            throw "Expected MSVC 19.34, but another compiler is active"
+          if ($clVersion -notmatch 'Version 19\.29\.') {
+            throw 'Expected MSVC 19.29 (v142 / toolset 14.29), but another compiler is active'
           }
 
           cmake --version
@@ -143,7 +110,7 @@ jobs:
             "llama.cpp fork build",
             "source commit: $env:GITHUB_SHA",
             "CUDA Toolkit: 12.0.0",
-            "MSVC toolset: 14.34 / compiler 19.34",
+            "MSVC toolset: 14.29 / compiler 19.29",
             "Windows SDK: 10.0.22621.0",
             "CMAKE_CUDA_ARCHITECTURES: 70 (sm_70)",
             "runner: windows-2022 x64"
