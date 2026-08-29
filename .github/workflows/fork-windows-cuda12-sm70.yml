@@ -1,15 +1,18 @@
 name: Fork - Windows CUDA 12.0 sm_70
 
 on:
-  # GitHub's "Sync fork -> Update branch" updates master, so every upstream
-  # synchronization automatically starts this build.
+  # GitHub's "Sync fork -> Update branch" updates master, so upstream source
+  # synchronizations automatically start this build. Fork-only workflow edits
+  # are ignored so maintaining CI does not trigger another 30-minute CUDA build.
   push:
     branches:
       - master
+    paths-ignore:
+      - '.github/**'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fork-windows-cuda12-sm70-${{ github.ref }}
@@ -134,7 +137,7 @@ jobs:
 
           # ggml-cuda.dll dynamically imports the CUDA runtime and cuBLAS DLLs.
           # Package them just like the upstream llama.cpp Windows CUDA release,
-          # so the artifact does not require a full CUDA Toolkit installation.
+          # so the release does not require a full CUDA Toolkit installation.
           $cudaDirs = @(
             (Join-Path $env:CUDA_PATH 'bin'),
             (Join-Path $env:CUDA_PATH 'bin\x64'),
@@ -174,10 +177,69 @@ jobs:
             "runner: windows-2022 x64"
           ) | Set-Content artifact/BUILD-INFO.txt
 
-      - name: Upload Windows CUDA 12 sm_70 binaries
+      - name: Package release ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $shortSha = $env:GITHUB_SHA.Substring(0, 12)
+          $zip = "llama-windows-x64-cuda12.0-sm70-$shortSha.zip"
+
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+
+          & 7z a -tzip $zip '.\artifact\*' -mx=7
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zip)) {
+            throw "Failed to create release ZIP: $zip"
+          }
+
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Release ZIP: $zip"
+          Write-Host "SHA256: $hash"
+          "RELEASE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_TAG=cuda12.0-sm70-$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload Windows CUDA 12 sm_70 artifact
         uses: actions/upload-artifact@v4
         with:
           name: llama-windows-x64-cuda12.0-sm70-${{ github.sha }}
-          path: artifact/**
+          path: llama-windows-x64-cuda12.0-sm70-*.zip
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $shortSha = $env:GITHUB_SHA.Substring(0, 12)
+          $title = "llama.cpp Windows x64 - CUDA 12.0 / sm_70 ($shortSha)"
+          $notes = @"
+          Windows x64 build of this llama.cpp fork, compiled specifically for NVIDIA compute capability 7.0 (sm_70).
+
+          - Source commit: $env:GITHUB_SHA
+          - CUDA Toolkit used for build: 12.0.0
+          - CUDA architecture: sm_70 / compute capability 7.0
+          - MSVC: 14.29 / compiler 19.29
+          - CUDA runtime bundled: cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll
+          - Full CUDA Toolkit installation is not required on the target machine; an appropriate NVIDIA driver is still required.
+          - SHA-256: $env:RELEASE_SHA256
+          "@
+
+          & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:RELEASE_TAG already exists; replacing asset."
+            & gh release upload $env:RELEASE_TAG $env:RELEASE_ZIP --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            & gh release create $env:RELEASE_TAG $env:RELEASE_ZIP `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:GITHUB_SHA `
+              --title $title `
+              --notes $notes
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to publish GitHub Release $env:RELEASE_TAG"
+          }

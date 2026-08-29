@@ -1,0 +1,108 @@
+name: Publish validated CUDA 12.0 sm_70 release
+
+on:
+  # One-time bootstrap publisher for the already validated Run #6 artifact.
+  # Future releases are published directly by fork-windows-cuda12-sm70.yml.
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/publish-current-cuda12-sm70-release.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  publish-validated-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: da3b56228b5e7dc6cbf0c4608f455e8416d13dc4
+      ARTIFACT_ID: '9710691465'
+      RELEASE_TAG: cuda12.0-sm70-da3b56228b5e
+      RELEASE_ASSET: llama-windows-x64-cuda12.0-sm70-da3b56228b5e.zip
+
+    steps:
+      - name: Download validated Run #6 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o "${RELEASE_ASSET}"
+
+      - name: Verify release payload
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, zipfile
+          asset = os.environ['RELEASE_ASSET']
+          required = {
+              'BUILD-INFO.txt',
+              'llama-server.exe',
+              'llama-cli.exe',
+              'ggml-cuda.dll',
+              'cudart64_12.dll',
+              'cublas64_12.dll',
+              'cublasLt64_12.dll',
+          }
+          with zipfile.ZipFile(asset) as zf:
+              names = {name.rsplit('/', 1)[-1] for name in zf.namelist()}
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit('Missing required release files: ' + ', '.join(missing))
+          print('Validated required files:', ', '.join(sorted(required)))
+          PY
+          sha256sum "${RELEASE_ASSET}" | tee "${RELEASE_ASSET}.sha256"
+
+      - name: Publish first GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<EOF
+          Validated Windows x64 build of this llama.cpp fork for NVIDIA sm_70 / compute capability 7.0.
+
+          - Source commit: ${SOURCE_SHA}
+          - Validated workflow run: #6
+          - CUDA Toolkit used for build: 12.0.0
+          - MSVC: 14.29 / compiler 19.29
+          - CUDA runtime bundled: cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll
+          - Full CUDA Toolkit installation is not required on the target Windows machine; an appropriate NVIDIA driver is still required.
+          - The ZIP was verified to contain llama-server.exe, llama-cli.exe and ggml-cuda.dll before publishing.
+          EOF
+          )
+
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${RELEASE_ASSET}" "${RELEASE_ASSET}.sha256" \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${RELEASE_ASSET}" "${RELEASE_ASSET}.sha256" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${SOURCE_SHA}" \
+              --title "llama.cpp Windows x64 - CUDA 12.0 / sm_70 (da3b56228b5e)" \
+              --notes "${notes}"
+          fi
+
+      - name: Disable inactive upstream CANN workflow on this fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh api --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/build-cann.yml/disable"
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Could not disable build-cann.yml automatically; release publication is unaffected."
+          else
+            echo "Disabled build-cann.yml on this fork."
+          fi
+          exit 0
