@@ -36,12 +36,18 @@ jobs:
           toolset: '14.29'
           sdk: '10.0.22621.0'
 
-      - name: Install CUDA Toolkit 12.0.0
+      - name: Install CUDA Toolkit 12.0.0 build components
         id: cuda
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: '12.0.0'
-          method: local
+          method: network
+          # Keep this aligned with what llama.cpp's Windows CUDA backend needs:
+          # compiler/runtime, CUDA C++ headers (Thrust/CUB), cuBLAS, plus the
+          # NVRTC/NVTX/VS integration pieces used by the normal Windows toolkit.
+          # The network installer downloads only these components instead of
+          # the entire multi-GB CUDA installer.
+          sub-packages: '["nvcc", "cudart", "thrust", "cublas", "cublas_dev", "nvrtc", "nvrtc_dev", "nvtx", "visual_studio_integration"]'
 
       - name: Verify toolchain
         shell: pwsh
