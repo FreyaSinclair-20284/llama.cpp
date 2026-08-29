@@ -89,7 +89,11 @@ jobs:
             -DGGML_CUDA=ON `
             -DGGML_NATIVE=OFF `
             -DCMAKE_CUDA_ARCHITECTURES=70 `
-            -DLLAMA_CURL=OFF
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_BUILD_EXAMPLES=OFF `
+            -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_BUILD_TOOLS=ON `
+            -DLLAMA_BUILD_SERVER=ON
 
       - name: Build Release
         shell: pwsh
@@ -114,10 +118,12 @@ jobs:
             Write-Host 'CMAKE_CUDA_HOST_COMPILER is not cached explicitly; nvcc used cl.exe from the verified MSVC 14.29 environment.'
           }
 
-      - name: Stage binaries
+      - name: Stage binaries and CUDA runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
+
           if (Test-Path build/bin/Release) {
             Copy-Item build/bin/Release/* artifact/ -Recurse -Force
           } elseif (Test-Path build/bin) {
@@ -125,10 +131,44 @@ jobs:
           } else {
             throw 'Build output directory was not found'
           }
+
+          # ggml-cuda.dll dynamically imports the CUDA runtime and cuBLAS DLLs.
+          # Package them just like the upstream llama.cpp Windows CUDA release,
+          # so the artifact does not require a full CUDA Toolkit installation.
+          $cudaDirs = @(
+            (Join-Path $env:CUDA_PATH 'bin'),
+            (Join-Path $env:CUDA_PATH 'bin\x64'),
+            (Join-Path $env:CUDA_PATH 'lib')
+          ) | Where-Object { Test-Path $_ }
+
+          foreach ($pattern in @('cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll')) {
+            $matches = @(
+              foreach ($dir in $cudaDirs) {
+                Get-ChildItem -Path $dir -Filter $pattern -File -ErrorAction SilentlyContinue
+              }
+            ) | Sort-Object FullName -Unique
+
+            if (-not $matches) {
+              throw "Required CUDA runtime DLL not found: $pattern"
+            }
+
+            foreach ($file in $matches) {
+              Write-Host "Packaging CUDA runtime: $($file.FullName)"
+              Copy-Item $file.FullName artifact/ -Force
+            }
+          }
+
+          foreach ($pattern in @('cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll')) {
+            if (-not (Get-ChildItem artifact -Filter $pattern -File -ErrorAction SilentlyContinue)) {
+              throw "CUDA runtime DLL was not staged: $pattern"
+            }
+          }
+
           @(
             "llama.cpp fork build",
             "source commit: $env:GITHUB_SHA",
             "CUDA Toolkit: 12.0.0",
+            "CUDA runtime DLLs: bundled",
             "MSVC toolset: 14.29 / compiler 19.29",
             "CMAKE_CUDA_ARCHITECTURES: 70 (sm_70)",
             "runner: windows-2022 x64"
