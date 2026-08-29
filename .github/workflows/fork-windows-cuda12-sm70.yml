@@ -63,23 +63,26 @@ jobs:
             throw 'Expected MSVC 19.29 (v142 / toolset 14.29), but another compiler is active'
           }
 
+          $clPath = (Get-Command cl.exe).Source
+          Write-Host "cl.exe=$clPath"
+          if ($clPath -notmatch 'MSVC\\14\.29\.') {
+            throw "cl.exe is not from the MSVC 14.29 toolset: $clPath"
+          }
+
           cmake --version
           ninja --version
 
       - name: Configure
         shell: pwsh
         run: |
-          $cudaHostCompiler = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\cl.exe'
-          if (-not (Test-Path $cudaHostCompiler)) {
-            throw "CUDA host compiler not found: $cudaHostCompiler"
-          }
-
+          # Do not pass CMAKE_CUDA_HOST_COMPILER as an absolute path here.
+          # With Ninja + CUDA 12.0 on Windows, CMake's compiler-id invocation
+          # can mangle a space-containing -ccbin path. The selected MSVC 14.29
+          # Developer Command Prompt already puts the correct cl.exe first in PATH.
           cmake -S . -B build -G "Ninja Multi-Config" `
             -DGGML_CUDA=ON `
             -DGGML_NATIVE=OFF `
             -DCMAKE_CUDA_ARCHITECTURES=70 `
-            -DCMAKE_CUDA_HOST_COMPILER="$cudaHostCompiler" `
-            -DCMAKE_SYSTEM_VERSION=10.0.22621.0 `
             -DLLAMA_CURL=OFF
 
       - name: Build Release
@@ -87,12 +90,22 @@ jobs:
         run: |
           cmake --build build --config Release --parallel $env:NUMBER_OF_PROCESSORS
 
-      - name: Verify sm_70 configuration
+      - name: Verify CUDA configuration
         shell: pwsh
         run: |
-          Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CUDA_ARCHITECTURES:.*=70$' | ForEach-Object { $_.Line }
-          if (-not (Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CUDA_ARCHITECTURES:.*=70$' -Quiet)) {
+          $ErrorActionPreference = 'Stop'
+
+          $archLine = Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CUDA_ARCHITECTURES:.*=70$'
+          if (-not $archLine) {
             throw 'CMAKE_CUDA_ARCHITECTURES is not set to 70'
+          }
+          Write-Host $archLine.Line
+
+          $hostLine = Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CUDA_HOST_COMPILER:.*MSVC[/\\]14\.29\.' -ErrorAction SilentlyContinue
+          if ($hostLine) {
+            Write-Host $hostLine.Line
+          } else {
+            Write-Host 'CMAKE_CUDA_HOST_COMPILER is not cached explicitly; nvcc used cl.exe from the verified MSVC 14.29 environment.'
           }
 
       - name: Stage binaries
@@ -111,7 +124,6 @@ jobs:
             "source commit: $env:GITHUB_SHA",
             "CUDA Toolkit: 12.0.0",
             "MSVC toolset: 14.29 / compiler 19.29",
-            "Windows SDK: 10.0.22621.0",
             "CMAKE_CUDA_ARCHITECTURES: 70 (sm_70)",
             "runner: windows-2022 x64"
           ) | Set-Content artifact/BUILD-INFO.txt
