@@ -3,6 +3,7 @@ name: Publish validated CUDA 12.0 sm_70 release
 on:
   # One-time bootstrap publisher for the already validated Run #6 artifact.
   # Future releases are published directly by fork-windows-cuda12-sm70.yml.
+  # This file change intentionally retriggers the bootstrap publisher.
   push:
     branches:
       - master
@@ -103,7 +104,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/workflows/build-cann.yml/disable"
           rc=$?
           if [ $rc -ne 0 ]; then
-            echo "::warning::Could not disable build-cann.yml automatically; release publication is unaffected."
+            echo "::warning::Could not disable build-cann.yml automatically; it is already manual-only and valid in the repository."
           else
             echo "Disabled build-cann.yml on this fork."
           fi
